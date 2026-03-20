@@ -1,1 +1,1 @@
-return require('shades')
+return require("shades")
