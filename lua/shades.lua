@@ -2,6 +2,8 @@ local M = {}
 
 M.set_color = nil
 M.socket_path = "/tmp/theme-change.sock"
+M.current_theme = nil
+M._theme_callbacks = {}
 
 -- Function to apply theme (or any other configuration provided by the user)
 function M.apply_theme(theme)
@@ -18,7 +20,14 @@ function M.listen()
 
 		if verb == "set" then
 			vim.schedule(function()
+				M.current_theme = noun
 				M.apply_theme(noun)
+				-- flush any callbacks waiting on the initial theme
+				local callbacks = M._theme_callbacks
+				M._theme_callbacks = {}
+				for _, cb in ipairs(callbacks) do
+					cb(M.current_theme)
+				end
 			end)
 		end
 	end
@@ -89,8 +98,18 @@ function M.listen()
 	end)
 end
 
+function M.get(callback)
+	if M.current_theme then
+		callback(M.current_theme)
+	else
+		-- theme not yet received from socket; queue until listen() gets the response
+		table.insert(M._theme_callbacks, callback)
+	end
+end
+
 -- Function to setup user's configuration
 function M.setup(config)
+	vim.notify("Setting up shades with provided configuration", vim.log.levels.WARN)
 	if type(config) ~= "table" then
 		error("Invalid configuration table provided.")
 	end
