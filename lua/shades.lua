@@ -3,12 +3,13 @@ local M = {}
 M.set_color = nil
 M.socket_path = "/tmp/theme-change.sock"
 M.current_theme = nil
+M.current_palette = nil
 M._theme_callbacks = {}
 
 -- Function to apply theme (or any other configuration provided by the user)
-function M.apply_theme(theme)
+function M.apply_theme(theme, palette)
 	if M.set_color then
-		M.set_color(theme)
+		M.set_color(theme, palette)
 	end
 end
 
@@ -20,15 +21,27 @@ function M.listen()
 			return
 		end
 
-		if verb == "set" then
+		if verb == "palette" then
+			local ok, decoded = pcall(vim.json.decode, noun)
+			if ok then
+				M.current_palette = decoded
+			else
+				vim.notify("shades.nvim: could not decode palette: " .. tostring(decoded), vim.log.levels.WARN)
+			end
+		elseif verb == "set" then
+			-- pair this set with the palette that preceded it rather than whatever
+			-- is current when the scheduled callback finally runs, so two theme
+			-- changes in quick succession cannot hand the first one's theme the
+			-- second one's colors
+			local palette = M.current_palette
 			vim.schedule(function()
 				M.current_theme = noun
-				M.apply_theme(noun)
+				M.apply_theme(noun, palette)
 				-- flush any callbacks waiting on the initial theme
 				local callbacks = M._theme_callbacks
 				M._theme_callbacks = {}
 				for _, cb in ipairs(callbacks) do
-					cb(M.current_theme)
+					cb(M.current_theme, palette)
 				end
 			end)
 		end
@@ -90,11 +103,18 @@ end
 
 function M.get(callback)
 	if M.current_theme then
-		callback(M.current_theme)
+		callback(M.current_theme, M.current_palette)
 	else
 		-- theme not yet received from socket; queue until listen() gets the response
 		table.insert(M._theme_callbacks, callback)
 	end
+end
+
+-- The colors of the current theme, keyed by shades' names (BG0, FG, RED, ...).
+-- nil until the first palette arrives, and nil forever against a daemon too old
+-- to send one.
+function M.palette()
+	return M.current_palette
 end
 
 -- Function to setup user's configuration
