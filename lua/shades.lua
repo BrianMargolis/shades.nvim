@@ -14,9 +14,11 @@ end
 
 function M.listen()
 	local function _process_message(message)
-		local parts = vim.split(message, ":")
-		local verb = parts[1]
-		local noun = parts[2]
+		-- only the first colon delimits the verb; a noun may contain colons of its own
+		local verb, noun = message:match("^([^:]+):(.*)$")
+		if not verb then
+			return
+		end
 
 		if verb == "set" then
 			vim.schedule(function()
@@ -32,67 +34,55 @@ function M.listen()
 		end
 	end
 
-	local socket_path = "/tmp/theme-change.sock"
-
-	local uv = vim.loop
 	local pipe, pipe_err = vim.loop.new_pipe(true)
 	if pipe_err then
-		print("Error creating pipe:", pipe_err)
+		vim.notify("shades.nvim: error creating pipe: " .. pipe_err, vim.log.levels.ERROR)
 		return
 	end
 
-	pipe:connect(socket_path, function(connect_err)
+	pipe:connect(M.socket_path, function(connect_err)
 		if connect_err then
-			print("Connection error:", connect_err)
+			vim.notify("shades.nvim: connection error: " .. connect_err, vim.log.levels.ERROR)
 			return
 		end
 
 		local buffer = ""
 		pipe:read_start(function(read_err, data)
 			if read_err then
-				print("Read error:", read_err)
+				vim.notify("shades.nvim: read error: " .. read_err, vim.log.levels.ERROR)
 				return
 			end
 
-			if data then
-				-- trim whitespace
-				data = string.gsub(data, "%s+", "")
-
-				-- put it on the buffer
-				buffer = buffer .. data
-
-				-- split it up, in case we got multiple messages
-				local parts = vim.split(buffer, "\n")
-
-				if #parts == 1 then
-					_process_message(parts[1])
-					buffer = ""
-				else
-					for i, part in ipairs(parts) do
-						if i < #parts then
-							_process_message(part)
-						end
-					end
-
-					buffer = parts[#parts]
-				end
-			else
-				print("Received nil")
+			if not data then
+				return
 			end
+
+			-- the read boundary is arbitrary, so a read can hold several messages,
+			-- part of one, or both. Everything up to the last "\n" is complete;
+			-- whatever trails it stays buffered for the next read. Nothing is
+			-- trimmed before the split, because that would eat the delimiter.
+			buffer = buffer .. data
+
+			local parts = vim.split(buffer, "\n")
+			for i = 1, #parts - 1 do
+				local message = vim.trim(parts[i])
+				if message ~= "" then
+					_process_message(message)
+				end
+			end
+			buffer = parts[#parts]
 		end)
 
 		-- write the subscribe message in
 		pipe:write("subscribe:neovim\n", function(write_err)
 			if write_err then
-				print("Write error:", write_err)
-				return
+				vim.notify("shades.nvim: write error: " .. write_err, vim.log.levels.ERROR)
 			end
 		end)
 		-- ask for the current theme
 		pipe:write("get:\n", function(write_err)
 			if write_err then
-				print("Write error:", write_err)
-				return
+				vim.notify("shades.nvim: write error: " .. write_err, vim.log.levels.ERROR)
 			end
 		end)
 	end)
@@ -109,21 +99,22 @@ end
 
 -- Function to setup user's configuration
 function M.setup(config)
-	vim.notify("Setting up shades with provided configuration", vim.log.levels.WARN)
 	if type(config) ~= "table" then
-		error("Invalid configuration table provided.")
+		error("shades.nvim: invalid configuration table provided.")
 	end
 
 	if type(config.set_color) == "function" then
 		M.set_color = config.set_color
 	else
-		error("Expected 'set_color' to be a function in the configuration table.")
+		error("shades.nvim: expected 'set_color' to be a function in the configuration table.")
 	end
 
-	if type(config.socket_path) == "string" then
-		M.socket_path = config.socket_path
-	else
-		error("Expected 'socket_path' to be a string in the configuration table.")
+	if config.socket_path ~= nil then
+		if type(config.socket_path) == "string" then
+			M.socket_path = config.socket_path
+		else
+			error("shades.nvim: expected 'socket_path' to be a string in the configuration table.")
+		end
 	end
 
 	M.listen()
