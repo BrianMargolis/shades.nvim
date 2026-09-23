@@ -5,6 +5,9 @@ M.socket_path = "/tmp/theme-change.sock"
 M.current_theme = nil
 M.current_palette = nil
 M._theme_callbacks = {}
+-- set once the daemon can't be reached, so wait() gives up at once instead of
+-- sitting out its whole timeout
+M._unreachable = false
 
 -- Function to apply theme (or any other configuration provided by the user)
 function M.apply_theme(theme, palette)
@@ -49,12 +52,14 @@ function M.listen()
 
 	local pipe, pipe_err = vim.loop.new_pipe(true)
 	if pipe_err then
+		M._unreachable = true
 		vim.notify("shades.nvim: error creating pipe: " .. pipe_err, vim.log.levels.ERROR)
 		return
 	end
 
 	pipe:connect(M.socket_path, function(connect_err)
 		if connect_err then
+			M._unreachable = true
 			vim.notify("shades.nvim: connection error: " .. connect_err, vim.log.levels.ERROR)
 			return
 		end
@@ -62,6 +67,7 @@ function M.listen()
 		local buffer = ""
 		pipe:read_start(function(read_err, data)
 			if read_err then
+				M._unreachable = true
 				vim.notify("shades.nvim: read error: " .. read_err, vim.log.levels.ERROR)
 				return
 			end
@@ -108,6 +114,20 @@ function M.get(callback)
 		-- theme not yet received from socket; queue until listen() gets the response
 		table.insert(M._theme_callbacks, callback)
 	end
+end
+
+-- Block until the daemon's current theme has been applied, for a startup that
+-- wants the real colors on its first frame instead of repainting a moment
+-- later. Only a wait on the event loop lets the connect, the read and the
+-- scheduled apply run at all during init. Gives up once the daemon is known to
+-- be unreachable, or after timeout_ms.
+---@param timeout_ms integer
+---@return boolean applied
+function M.wait(timeout_ms)
+	vim.wait(timeout_ms, function()
+		return M.current_theme ~= nil or M._unreachable
+	end, 1)
+	return M.current_theme ~= nil
 end
 
 -- The colors of the current theme, keyed by shades' names (BG0, FG, RED, ...).
