@@ -16,6 +16,33 @@ local function notify(message, level)
 	end)
 end
 
+local RETRY_MIN_MS = 1000
+local RETRY_MAX_MS = 30000
+local retry_delay_ms = RETRY_MIN_MS
+local retry_timer = vim.loop.new_timer()
+-- notify once per outage rather than on every failed retry
+local outage_notified = false
+
+-- close the dead pipe and try listen() again after a backoff, so a daemon that
+-- restarts, or starts after Neovim, is picked up without restarting Neovim
+local function reconnect_later(pipe, message)
+	if not pipe:is_closing() then
+		pipe:close()
+	end
+	M._unreachable = true
+
+	if not outage_notified then
+		outage_notified = true
+		notify(message .. ", retrying", vim.log.levels.WARN)
+	end
+
+	local delay = retry_delay_ms
+	retry_delay_ms = math.min(retry_delay_ms * 2, RETRY_MAX_MS)
+	retry_timer:start(delay, 0, function()
+		M.listen()
+	end)
+end
+
 -- Function to apply theme (or any other configuration provided by the user)
 function M.apply_theme(theme, palette)
 	if M.set_color then
@@ -66,20 +93,26 @@ function M.listen()
 
 	pipe:connect(M.socket_path, function(connect_err)
 		if connect_err then
-			M._unreachable = true
-			notify("connection error: " .. connect_err, vim.log.levels.ERROR)
+			reconnect_later(pipe, "connection error: " .. connect_err)
 			return
+		end
+
+		M._unreachable = false
+		retry_delay_ms = RETRY_MIN_MS
+		if outage_notified then
+			outage_notified = false
+			notify("reconnected", vim.log.levels.INFO)
 		end
 
 		local buffer = ""
 		pipe:read_start(function(read_err, data)
 			if read_err then
-				M._unreachable = true
-				notify("read error: " .. read_err, vim.log.levels.ERROR)
+				reconnect_later(pipe, "read error: " .. read_err)
 				return
 			end
 
 			if not data then
+				reconnect_later(pipe, "daemon closed the connection")
 				return
 			end
 

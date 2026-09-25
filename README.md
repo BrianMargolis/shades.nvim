@@ -21,6 +21,10 @@ Installation example with `lazy.nvim`:
 
 `socket_path` is optional and defaults to `/tmp/theme-change.sock`.
 
+If the daemon isn't running, or the connection drops, the plugin retries with
+backoff (1s doubling up to 30s) and reapplies the current theme once it
+reconnects.
+
 ## The palette
 
 `set_color` receives a second argument: the colors of the theme being applied,
