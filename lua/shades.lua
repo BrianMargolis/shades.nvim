@@ -9,6 +9,13 @@ M._theme_callbacks = {}
 -- sitting out its whole timeout
 M._unreachable = false
 
+-- the libuv callbacks run in a fast event context, where vim.notify throws E5560
+local function notify(message, level)
+	vim.schedule(function()
+		vim.notify("shades.nvim: " .. message, level)
+	end)
+end
+
 -- Function to apply theme (or any other configuration provided by the user)
 function M.apply_theme(theme, palette)
 	if M.set_color then
@@ -29,7 +36,7 @@ function M.listen()
 			if ok then
 				M.current_palette = decoded
 			else
-				vim.notify("shades.nvim: could not decode palette: " .. tostring(decoded), vim.log.levels.WARN)
+				notify("could not decode palette: " .. tostring(decoded), vim.log.levels.WARN)
 			end
 		elseif verb == "set" then
 			-- pair this set with the palette that preceded it rather than whatever
@@ -53,14 +60,14 @@ function M.listen()
 	local pipe, pipe_err = vim.loop.new_pipe(true)
 	if pipe_err then
 		M._unreachable = true
-		vim.notify("shades.nvim: error creating pipe: " .. pipe_err, vim.log.levels.ERROR)
+		notify("error creating pipe: " .. pipe_err, vim.log.levels.ERROR)
 		return
 	end
 
 	pipe:connect(M.socket_path, function(connect_err)
 		if connect_err then
 			M._unreachable = true
-			vim.notify("shades.nvim: connection error: " .. connect_err, vim.log.levels.ERROR)
+			notify("connection error: " .. connect_err, vim.log.levels.ERROR)
 			return
 		end
 
@@ -68,7 +75,7 @@ function M.listen()
 		pipe:read_start(function(read_err, data)
 			if read_err then
 				M._unreachable = true
-				vim.notify("shades.nvim: read error: " .. read_err, vim.log.levels.ERROR)
+				notify("read error: " .. read_err, vim.log.levels.ERROR)
 				return
 			end
 
@@ -95,13 +102,13 @@ function M.listen()
 		-- write the subscribe message in
 		pipe:write("subscribe:neovim\n", function(write_err)
 			if write_err then
-				vim.notify("shades.nvim: write error: " .. write_err, vim.log.levels.ERROR)
+				notify("write error: " .. write_err, vim.log.levels.ERROR)
 			end
 		end)
 		-- ask for the current theme
 		pipe:write("get:\n", function(write_err)
 			if write_err then
-				vim.notify("shades.nvim: write error: " .. write_err, vim.log.levels.ERROR)
+				notify("write error: " .. write_err, vim.log.levels.ERROR)
 			end
 		end)
 	end)
