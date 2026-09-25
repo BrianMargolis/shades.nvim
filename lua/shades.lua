@@ -2,6 +2,7 @@ local M = {}
 
 M.set_color = nil
 M.socket_path = "/tmp/theme-change.sock"
+M.binary = "shades"
 M.current_theme = nil
 M.current_palette = nil
 M._theme_callbacks = {}
@@ -177,6 +178,66 @@ function M.palette()
 	return M.current_palette
 end
 
+-- the daemon only tells clients a theme's name and colors, so anything that
+-- needs the config (defaults, which variants are light) goes through the CLI
+local function run_shades(args, on_success)
+	local ok, err = pcall(vim.system, vim.list_extend({ M.binary }, args), { text = true }, function(result)
+		if result.code ~= 0 then
+			local output = vim.trim(result.stderr ~= "" and result.stderr or result.stdout)
+			notify(table.concat(args, " ") .. " failed: " .. output, vim.log.levels.ERROR)
+			return
+		end
+		if on_success then
+			on_success(result.stdout)
+		end
+	end)
+	if not ok then
+		notify("could not run " .. M.binary .. ": " .. tostring(err), vim.log.levels.ERROR)
+	end
+end
+
+-- Switch to the default theme on the other side (light or dark) of the current one.
+function M.toggle()
+	run_shades({ "toggle" })
+end
+
+-- Switch to a random theme that is dark if the current one is, light if not.
+function M.random()
+	local current = M.current_theme
+	if not current then
+		notify("no current theme yet", vim.log.levels.WARN)
+		return
+	end
+
+	run_shades({ "list", "--dark" }, function(stdout)
+		local dark = vim.tbl_contains(vim.split(stdout, "\n", { trimempty = true }), current)
+		run_shades({ "random", dark and "--dark" or "--light" })
+	end)
+end
+
+local subcommands = {
+	toggle = M.toggle,
+	random = M.random,
+}
+
+local function create_command()
+	vim.api.nvim_create_user_command("Shades", function(opts)
+		local subcommand = subcommands[opts.args]
+		if not subcommand then
+			notify("unknown subcommand '" .. opts.args .. "'", vim.log.levels.ERROR)
+			return
+		end
+		subcommand()
+	end, {
+		nargs = 1,
+		complete = function(lead)
+			return vim.tbl_filter(function(name)
+				return vim.startswith(name, lead)
+			end, vim.tbl_keys(subcommands))
+		end,
+	})
+end
+
 -- Function to setup user's configuration
 function M.setup(config)
 	if type(config) ~= "table" then
@@ -197,6 +258,15 @@ function M.setup(config)
 		end
 	end
 
+	if config.binary ~= nil then
+		if type(config.binary) == "string" then
+			M.binary = config.binary
+		else
+			error("shades.nvim: expected 'binary' to be a string in the configuration table.")
+		end
+	end
+
+	create_command()
 	M.listen()
 end
 
